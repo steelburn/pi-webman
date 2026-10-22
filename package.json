@@ -1,7 +1,7 @@
 {
   "name": "pi-webman",
-  "version": "0.1.4",
-  "description": "A futuristic web cockpit for Pi \u2014 live transcript, telemetry, models, tools and command uplink.",
+  "version": "0.1.5",
+  "description": "A futuristic web cockpit for Pi — live transcript, telemetry, models, tools and command uplink.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -29,7 +29,6 @@
     "src",
     "ui",
     "scripts",
-    "docs",
     "README.md",
     "LICENSE"
   ],
