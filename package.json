@@ -1,0 +1,40 @@
+{
+  "name": "pi-webman",
+  "version": "0.1.0",
+  "description": "A futuristic web cockpit for Pi \u2014 live transcript, telemetry, models, tools and command uplink.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "web-ui",
+    "cockpit"
+  ],
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "ui",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "scripts": {
+    "build": "node scripts/build-ui.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run build && npm run typecheck && npm run check:ui",
+    "watch": "node scripts/build-ui.mjs --watch",
+    "check:ui": "node --check ui/app.js"
+  }
+}
