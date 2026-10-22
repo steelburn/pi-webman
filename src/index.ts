@@ -104,7 +104,7 @@ class CockpitRuntime {
       handler: cockpitCommand,
     });
 
-    // Familiar alias that does not collide with the separate pi-cockpit extension.
+    // Familiar alias that does not collide with the sibling pi-cockpit-hud extension.
     this.pi.registerCommand("webman", {
       description: "Alias for /web — open the Pi web cockpit",
       handler: cockpitCommand,

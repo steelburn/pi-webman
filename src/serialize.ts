@@ -16,26 +16,26 @@ export function safeStringify(value: unknown): string {
     }
     if (typeof input === "string") {
       return input.length > MAX_STRING
-        ? `${input.slice(0, MAX_STRING)}\n…[pi-cockpit: truncated ${input.length - MAX_STRING} chars]`
+        ? `${input.slice(0, MAX_STRING)}\n…[pi-webman: truncated ${input.length - MAX_STRING} chars]`
         : input;
     }
     if (typeof input === "bigint") return Number(input);
     if (typeof input === "undefined" || typeof input === "function" || typeof input === "symbol") {
       return undefined;
     }
-    if (depth > MAX_DEPTH) return "[pi-cockpit: depth limit]";
+    if (depth > MAX_DEPTH) return "[pi-webman: depth limit]";
     if (input instanceof Error) {
       return { name: input.name, message: input.message, stack: input.stack };
     }
     if (Array.isArray(input)) {
-      if (seen.has(input)) return "[pi-cockpit: circular]";
+      if (seen.has(input)) return "[pi-webman: circular]";
       seen.add(input);
       const out = input.map((entry) => walk(entry, depth + 1));
       seen.delete(input);
       return out;
     }
     if (typeof input === "object") {
-      if (seen.has(input as object)) return "[pi-cockpit: circular]";
+      if (seen.has(input as object)) return "[pi-webman: circular]";
       seen.add(input as object);
       const out: Record<string, unknown> = {};
       for (const [key, entry] of Object.entries(input as Record<string, unknown>)) {

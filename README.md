@@ -5,7 +5,8 @@ flight deck around the Pi session already running in your terminal: streaming tr
 token flux, context pressure, model core, thinking level, tool loadout, activity log,
 command uplink and a keyboard-driven command palette.
 
-Inspired by pi-cockpit's terminal flight deck and telemetry, rebuilt as a
+Inspired by the terminal flight deck and telemetry of its sibling HUD extension
+[`pi-cockpit-hud`](https://github.com/steelburn/pi-cockpit-hud), rebuilt as a
 zero-dependency local web UI served by a Pi extension.
 
 ![Pi // Cockpit](docs/cockpit.png)
@@ -156,11 +157,14 @@ The browser receives a full snapshot in the SSE `hello` frame, then applies live
 Session state is persisted as a branch-scoped custom entry (`pi-webman`) so the cockpit can
 come back after a runtime reload without polluting model context.
 
-### Coexistence with pi-cockpit
+### Coexistence with pi-cockpit-hud
 
-`pi-cockpit` is a separate terminal HUD extension and owns the `/cockpit` command. Webman
-uses `/web`, `/webman` and `/web-session`, its own footer key (`webman`) and its own custom
+[`pi-cockpit-hud`](https://github.com/steelburn/pi-cockpit-hud) (`npm:pi-cockpit-hud`) is a
+separate terminal HUD extension and owns the `/cockpit` command. Webman uses `/web`,
+`/webman` and `/web-session`, its own footer status key (`webman`) and its own custom
 session entry type (`pi-webman`), so both extensions can be installed at once.
+
+Note: the unrelated `pi-cockpit` package on npm is not part of this project.
 
 ## Development
 
