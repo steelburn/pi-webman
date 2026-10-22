@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { networkInterfaces } from "node:os";
 import type {
@@ -21,10 +22,36 @@ import {
   type CockpitStatus,
 } from "./state.ts";
 
-const VERSION = "0.1.0";
 const DEFAULT_PORT = 4747;
 const DEFAULT_HOST = "127.0.0.1";
 const SESSION_STATE_ENTRY = "pi-webman";
+const HANDOFF_TTL_MS = 60_000;
+
+/**
+ * Session replacement tears down this extension instance and loads a fresh one,
+ * so the running server cannot be inherited. Hand its coordinates over through
+ * module scope: the module itself stays loaded, only the factory runs again.
+ */
+interface ServerHandoff {
+  host: string;
+  port: number;
+  token?: string;
+  at: number;
+}
+
+let handoff: ServerHandoff | undefined;
+
+function readVersion(): string {
+  try {
+    const url = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync(url, "utf8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const VERSION = readVersion();
 
 interface PersistedState {
   enabled: boolean;
@@ -150,14 +177,19 @@ class CockpitRuntime {
       }
       this.scheduleState(0);
 
+      const inherited = handoff && Date.now() - handoff.at <= HANDOFF_TTL_MS ? handoff : undefined;
+      handoff = undefined;
       const shouldAutoStart = this.pi.getFlag("web") === true;
       const shouldRestore =
-        (event.reason === "reload" || event.reason === "resume") && this.wasEnabled(ctx);
+        Boolean(inherited) ||
+        ((event.reason === "reload" || event.reason === "resume") && this.wasEnabled(ctx));
       if (!this.server && (shouldAutoStart || shouldRestore)) {
         void this.start({
-          open: this.pi.getFlag("web-open") === true,
+          open: !inherited && this.pi.getFlag("web-open") === true,
           quiet: false,
-          port: shouldRestore ? this.persistedPort(ctx) : undefined,
+          host: inherited?.host,
+          token: inherited?.token,
+          port: inherited ? inherited.port : shouldRestore ? this.persistedPort(ctx) : undefined,
         }).catch((error: unknown) => {
           this.notify(ctx, `Web Cockpit failed to start: ${errorMessage(error)}`, "error");
         });
@@ -165,11 +197,20 @@ class CockpitRuntime {
     });
 
     this.pi.on("session_shutdown", async (event, ctx) => {
-      if (event.reason === "quit" || event.reason === "reload") {
+      const replacing =
+        event.reason === "new" || event.reason === "resume" || event.reason === "fork";
+      if (replacing) {
+        // pi rebuilds the extension for the replacement session; release the port
+        // and let the next instance adopt it so the browser keeps its URL.
+        if (this.server) {
+          handoff = { host: this.host, port: this.port, token: this.token, at: Date.now() };
+        }
+        this.ctx = undefined;
+        await this.stop({ persist: false });
+      } else if (event.reason === "quit" || event.reason === "reload") {
         await this.stop({ persist: false });
       } else {
         this.ctx = undefined;
-        this.publish({ type: "notice", level: "warning", message: `Session ${event.reason} in progress…` });
       }
       try {
         ctx.ui.setStatus("webman", undefined);

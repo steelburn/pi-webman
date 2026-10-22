@@ -9,7 +9,10 @@ Inspired by the terminal flight deck and telemetry of its sibling HUD extension
 [`pi-cockpit-hud`](https://github.com/steelburn/pi-cockpit-hud), rebuilt as a
 zero-dependency local web UI served by a Pi extension.
 
-![Pi // Cockpit](docs/cockpit.png)
+![Pi // Cockpit demo](docs/cockpit-demo.gif)
+
+A real run: directive in, tool calls, a streamed answer and live telemetry —
+[full-resolution MP4](https://github.com/steelburn/pi-webman/releases/download/v0.1.4/cockpit-demo.mp4).
 
 ## Highlights
 
