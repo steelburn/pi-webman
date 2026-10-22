@@ -31,7 +31,13 @@ zero-dependency local web UI served by a Pi extension.
 
 ## Install
 
-From this directory:
+From the [Pi package catalog](https://pi.dev/packages/pi-webman):
+
+```bash
+pi install npm:pi-webman
+```
+
+From a checkout of this repo:
 
 ```bash
 pi install "$(pwd)"

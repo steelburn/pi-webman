@@ -1,6 +1,6 @@
 {
   "name": "pi-webman",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A futuristic web cockpit for Pi \u2014 live transcript, telemetry, models, tools and command uplink.",
   "type": "module",
   "keywords": [
@@ -10,7 +10,17 @@
     "cockpit"
   ],
   "license": "MIT",
+  "author": "steelburn",
+  "homepage": "https://github.com/steelburn/pi-webman#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/steelburn/pi-webman.git"
+  },
+  "bugs": {
+    "url": "https://github.com/steelburn/pi-webman/issues"
+  },
   "pi": {
+    "image": "https://raw.githubusercontent.com/steelburn/pi-webman/main/docs/cockpit.png",
     "extensions": [
       "./src/index.ts"
     ]
