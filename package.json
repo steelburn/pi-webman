@@ -1,13 +1,16 @@
 {
   "name": "pi-webman",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "A futuristic web cockpit for Pi — live transcript, telemetry, models, tools and command uplink.",
   "type": "module",
   "keywords": [
     "pi-package",
     "pi-extension",
     "web-ui",
-    "cockpit"
+    "cockpit",
+    "slash-commands",
+    "popups",
+    "extension-ui"
   ],
   "license": "MIT",
   "author": "steelburn",
@@ -30,7 +33,8 @@
     "ui",
     "scripts",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "examples"
   ],
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

@@ -169,6 +169,23 @@
         </div>
 
         <div class="composer-wrap">
+          <div class="ui-prompt" id="ui-prompt" hidden>
+            <span class="ui-prompt-glyph">⌨</span>
+            <span class="ui-prompt-label">TERMINAL PROMPT</span>
+            <span class="ui-prompt-title" id="ui-prompt-title">Waiting for input in the Pi terminal</span>
+            <span class="ui-prompt-hint">answer in your terminal to continue</span>
+          </div>
+
+          <div class="cmd-menu" id="cmd-menu" hidden role="listbox" aria-label="Command completion">
+            <div class="cmd-head" id="cmd-head">COMMANDS</div>
+            <div class="cmd-list" id="cmd-list"></div>
+            <div class="cmd-foot">
+              <span><kbd>↑</kbd><kbd>↓</kbd> select</span>
+              <span><kbd>TAB</kbd>/<kbd>ENTER</kbd> accept</span>
+              <span><kbd>ESC</kbd> dismiss</span>
+            </div>
+          </div>
+
           <div class="composer" id="composer">
             <div class="composer-top">
               <div class="mode-switch" id="mode-switch" role="group" aria-label="Delivery mode">
@@ -269,6 +286,21 @@
         <span><kbd>ENTER</kbd> execute</span>
         <span><kbd>ESC</kbd> close</span>
       </div>
+    </div>
+  </div>
+
+  <div class="popup-layer" id="popup-layer" hidden>
+    <div class="popup" role="dialog" aria-modal="true" aria-labelledby="popup-title">
+      <div class="popup-kicker" id="popup-kicker">EXTENSION</div>
+      <div class="popup-title" id="popup-title"></div>
+      <div class="popup-message" id="popup-message" hidden></div>
+      <div class="popup-options" id="popup-options" hidden></div>
+      <input class="popup-input" id="popup-input" hidden />
+      <div class="popup-actions">
+        <button type="button" class="hud-btn ghost" id="popup-cancel">CANCEL</button>
+        <button type="button" class="hud-btn primary" id="popup-ok">CONFIRM</button>
+      </div>
+      <div class="popup-queue" id="popup-queue" hidden></div>
     </div>
   </div>
 

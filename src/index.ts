@@ -17,10 +17,21 @@ import {
   buildSnapshot,
   snapshotLite,
   ALL_THINKING_LEVELS,
+  TERMINAL_COMMANDS,
+  WEB_COMMANDS,
   type ActivityItem,
   type CockpitSnapshot,
   type CockpitStatus,
 } from "./state.ts";
+import {
+  PopupRegistry,
+  POPUP_ANSWER_CHANNEL,
+  POPUP_CLOSE_CHANNEL,
+  POPUP_OPEN_CHANNEL,
+  POPUP_PING_CHANNEL,
+  POPUP_PONG_CHANNEL,
+  POPUP_READY_CHANNEL,
+} from "./popups.ts";
 
 const DEFAULT_PORT = 4747;
 const DEFAULT_HOST = "127.0.0.1";
@@ -85,6 +96,11 @@ class CockpitRuntime {
   private readonly activeTools = new Map<string, ActivityItem>();
   private activity: ActivityItem[] = [];
   private stateTimer: NodeJS.Timeout | undefined;
+  /** Set while a Pi extension dialog is blocking the terminal. */
+  private uiPrompt: { kind: string; title: string | undefined; since: number } | null = null;
+  /** Popups published by extensions through the webman popup bridge. */
+  private readonly popups = new PopupRegistry();
+  private popupUnsubscribers: Array<() => void> = [];
 
   constructor(pi: ExtensionAPI) {
     this.pi = pi;
@@ -422,14 +438,94 @@ class CockpitRuntime {
     });
 
     this.pi.on("ui_prompt_start", (event) => {
-      this.publish({ type: "ui_prompt", active: true, kind: event.kind, title: event.title });
+      this.uiPrompt = { kind: event.kind, title: event.title, since: Date.now() };
+      this.publish({
+        type: "ui_prompt",
+        active: true,
+        kind: event.kind,
+        title: event.title,
+        since: this.uiPrompt.since,
+      });
       this.scheduleState(0);
     });
 
     this.pi.on("ui_prompt_end", (event) => {
+      this.uiPrompt = null;
       this.publish({ type: "ui_prompt", active: false, kind: event.kind, title: event.title });
       this.scheduleState(0);
     });
+
+    this.bindPopupBridge();
+  }
+
+  /**
+   * Popups an extension wants rendered in the browser. The pi extension API
+   * cannot mirror arbitrary TUI components, so extensions publish a description
+   * on the shared event bus and get the answer back on it.
+   */
+  private bindPopupBridge(): void {
+    this.unbindPopupBridge();
+    const events = this.pi.events;
+    if (!events) return;
+    this.popupUnsubscribers = [
+      events.on(POPUP_OPEN_CHANNEL, (payload: unknown) => {
+        const spec = this.popups.open(payload);
+        if (!spec) return;
+        this.publish({ type: "popup_open", popup: spec });
+        this.scheduleState(0);
+      }),
+      events.on(POPUP_CLOSE_CHANNEL, (payload: unknown) => {
+        const id = typeof payload === "object" && payload !== null ? (payload as { id?: unknown }).id : payload;
+        if (typeof id !== "string") return;
+        if (!this.popups.close(id)) return;
+        this.publish({ type: "popup_close", id });
+        this.scheduleState(0);
+      }),
+      // Presence probe: an extension can ask whether a browser is actually
+      // listening before it decides between a web popup and a terminal dialog.
+      events.on(POPUP_PING_CHANNEL, (payload: unknown) => {
+        const id = typeof payload === "object" && payload !== null ? (payload as { id?: unknown }).id : undefined;
+        try {
+          events.emit(POPUP_PONG_CHANNEL, {
+            id,
+            url: this.url,
+            version: VERSION,
+            clients: this.hub?.subscriberCount ?? 0,
+          });
+        } catch {
+          /* extension unloaded */
+        }
+      }),
+    ];
+  }
+
+  private unbindPopupBridge(): void {
+    for (const off of this.popupUnsubscribers) {
+      try {
+        off();
+      } catch {
+        /* bus may already be torn down */
+      }
+    }
+    this.popupUnsubscribers = [];
+  }
+
+  private answerPopup(payload: { id?: unknown; value?: unknown; cancelled?: unknown }): { ok: boolean; error?: string } {
+    const id = typeof payload.id === "string" ? payload.id : "";
+    const popup = id ? this.popups.get(id) : undefined;
+    if (!popup) return { ok: false, error: "Unknown or expired popup" };
+    this.popups.close(id);
+    const value = typeof payload.value === "string" ? payload.value : undefined;
+    const cancelled = payload.cancelled === true || (popup.kind !== "notice" && value === undefined);
+    const answer = { id, ...(value !== undefined ? { value } : {}), ...(cancelled ? { cancelled: true } : {}) };
+    try {
+      this.pi.events?.emit(POPUP_ANSWER_CHANNEL, answer);
+    } catch {
+      /* an extension may have unloaded */
+    }
+    this.publish({ type: "popup_close", id, answer });
+    this.scheduleState(0);
+    return { ok: true };
   }
 
   async start(options: StartOptions = {}): Promise<{ url: string; started: boolean }> {
@@ -494,6 +590,16 @@ class CockpitRuntime {
       level: "info",
       message: token ? "Pi Web Cockpit online (token auth enabled)" : "Pi Web Cockpit online",
     });
+    // Announce the browser endpoint so extensions can route popups here.
+    try {
+      this.pi.events?.emit(POPUP_READY_CHANNEL, {
+        url: this.url,
+        version: VERSION,
+        clients: this.hub.subscriberCount,
+      });
+    } catch {
+      /* no bus in this host */
+    }
     this.persistState(true);
 
     if (!options.quiet) this.notifyUrl();
@@ -518,6 +624,9 @@ class CockpitRuntime {
       clearTimeout(this.stateTimer);
       this.stateTimer = undefined;
     }
+    this.uiPrompt = null;
+    this.popups.clear();
+    this.unbindPopupBridge();
     hub?.close();
     if (server) {
       await new Promise<void>((resolve) => {
@@ -548,6 +657,7 @@ class CockpitRuntime {
       compact: (instructions) => this.compact(instructions),
       rename: (name) => this.rename(name),
       newSession: () => this.newSession(),
+      answerPopup: (payload) => this.answerPopup(payload),
       isBusy: () => (this.ctx ? !this.ctx.isIdle() : true),
     };
   }
@@ -567,6 +677,8 @@ class CockpitRuntime {
       lastError: this.lastError,
       statusSince: this.statusSince,
       activity: this.activity,
+      uiPrompt: this.uiPrompt,
+      popups: this.popups.list(),
     });
   }
 
@@ -580,6 +692,7 @@ class CockpitRuntime {
 
   private async prompt(message: string, mode: PromptMode): Promise<{ disposition: string; busy: boolean }> {
     const ctx = this.requireCtx();
+    this.assertRunnableCommand(message);
     const busy = !ctx.isIdle();
     let deliverAs: "steer" | "followUp" | undefined;
     if (busy) deliverAs = mode === "steer" ? "steer" : "followUp";
@@ -650,6 +763,32 @@ class CockpitRuntime {
       throw new Error("New sessions must be started from the terminal in RPC/JSON/print mode");
     }
     this.pi.sendUserMessage("/web-session new", { expandPromptTemplates: true });
+  }
+
+  /**
+   * Pi's builtin slash commands are handled by the interactive editor, not by the
+   * session. Forwarding one would silently bill a model request for text like
+   * "/thinking low", so known-but-unrunnable commands are refused here. Unknown
+   * `/` words still pass through: they are ordinary prompt text such as a path.
+   */
+  private assertRunnableCommand(message: string): void {
+    const match = /^\/([A-Za-z0-9:_-]+)/.exec(message.trim());
+    if (!match) return;
+    const name = match[1] ?? "";
+    if (!name) return;
+    let live: Set<string>;
+    try {
+      live = new Set(this.pi.getCommands().map((command) => command.name));
+    } catch {
+      return;
+    }
+    if (live.has(name)) return;
+    if (WEB_COMMANDS.some((command) => command.name === name)) {
+      throw new Error(`/${name} is a cockpit command — run it from the composer`);
+    }
+    if (TERMINAL_COMMANDS.some((command) => command.name === name)) {
+      throw new Error(`/${name} only runs in the Pi terminal`);
+    }
   }
 
   private requireCtx(): ExtensionContext {

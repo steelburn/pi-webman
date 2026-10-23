@@ -34,6 +34,20 @@
     composerHint: $("#composer-hint"),
     quick: $("#quick-actions"),
     queueInfo: $("#queue-info"),
+    cmdMenu: $("#cmd-menu"),
+    cmdHead: $("#cmd-head"),
+    cmdList: $("#cmd-list"),
+    uiPrompt: $("#ui-prompt"),
+    uiPromptTitle: $("#ui-prompt-title"),
+    popupLayer: $("#popup-layer"),
+    popupKicker: $("#popup-kicker"),
+    popupTitle: $("#popup-title"),
+    popupMessage: $("#popup-message"),
+    popupOptions: $("#popup-options"),
+    popupInput: $("#popup-input"),
+    popupCancel: $("#popup-cancel"),
+    popupOk: $("#popup-ok"),
+    popupQueue: $("#popup-queue"),
     ctxPercent: $("#ctx-percent"),
     ctxTokens: $("#ctx-tokens"),
     ctxWindow: $("#ctx-window"),
@@ -122,6 +136,10 @@
     programmaticScroll: false,
     promptIndex: -1,
     palette: { open: false, items: [], filtered: [], index: 0, scope: "all" },
+    cmd: { open: false, items: [], filtered: [], index: 0, mode: "command", command: null },
+    popups: [],
+    popupDraft: "",
+    uiPrompt: null,
     modal: null,
     toolsSignature: "",
     thinkingSignature: "",
@@ -628,8 +646,17 @@
         break;
       case "ui_prompt":
         if (payload.active) {
+          applyUiPrompt({ kind: payload.kind, title: payload.title, since: payload.since });
           toast(`Pi is waiting for terminal input${payload.title ? `: ${payload.title}` : ""}`, "warning", 9000);
+        } else {
+          applyUiPrompt(null);
         }
+        break;
+      case "popup_open":
+        upsertPopup(payload.popup);
+        break;
+      case "popup_close":
+        if (payload.id) removePopup(payload.id);
         break;
       case "notice":
         toast(payload.message || "", payload.level || "info");
@@ -679,12 +706,15 @@
     applyTotals(snapshot.totals || {});
     applyUsage(snapshot.contextUsage);
     applyActivity();
+    applyPopups(snapshot.popups || []);
+    applyUiPrompt(snapshot.uiPrompt || null);
     state.busy = !(snapshot.status?.idle ?? true);
     state.idle = snapshot.status?.idle ?? true;
     state.pending = snapshot.status?.pending ?? false;
     state.hasRun = (snapshot.totals?.messages || 0) > 0;
     state.sessionMode = snapshot.session?.mode || "";
     state.capabilities = snapshot.capabilities || {};
+    if (state.cmd.open) updateCompletion();
     setStatusUI(snapshot.status?.kind || "idle", snapshot.status?.detail || "");
     updateBusyUI();
 
@@ -1464,6 +1494,25 @@
   async function sendPrompt() {
     const text = dom.input.value.trim();
     if (!text) return;
+
+    const parsed = parseCommand(text);
+    if (parsed) {
+      const command = findCommand(parsed.name);
+      if (command && command.origin === "web") {
+        closeCompletion();
+        dom.input.value = "";
+        autoGrow();
+        rememberPrompt(text);
+        await runWebCommand(parsed.name, parsed.args);
+        return;
+      }
+      if (command && command.origin === "terminal") {
+        toast(`/${parsed.name} only runs in the Pi terminal`, "warning", 4200);
+        return;
+      }
+    }
+
+    closeCompletion();
     dom.sendBtn.disabled = true;
     try {
       const result = await api("/api/prompt", { message: text, mode: state.mode });
@@ -1479,6 +1528,127 @@
       dom.sendBtn.disabled = false;
       dom.input.focus();
     }
+  }
+
+  /* ------------------------------------------------------------
+     cockpit commands
+     ------------------------------------------------------------ */
+
+  function parseCommand(text) {
+    const match = /^\/([A-Za-z0-9:_-]+)\s*([\s\S]*)$/.exec(text);
+    if (!match) return null;
+    return { name: match[1], args: (match[2] || "").trim() };
+  }
+
+  function findCommand(name) {
+    const commands = state.snapshot?.commands || [];
+    const key = String(name || "").toLowerCase();
+    return commands.find((command) => command.name.toLowerCase() === key) || null;
+  }
+
+  async function runWebCommand(name, args) {
+    switch (name) {
+      case "compact":
+        if (state.capabilities.compact === false) return toast("Compaction is unavailable right now", "warning");
+        return compactWithInstructions(args);
+      case "model":
+        if (!args) return openPalette("models");
+        return switchModelByQuery(args);
+      case "thinking":
+        if (!args) return cycleThinking();
+        return setThinking(args.toLowerCase());
+      case "name":
+        if (!args) return renameSession();
+        await renameTo(args);
+        return undefined;
+      case "new":
+        if (state.capabilities.newSession === false) return toast("New sessions are available in interactive mode only", "warning");
+        return newSession();
+      case "abort":
+        return abortRun();
+      case "theme": {
+        const wanted = args.toLowerCase();
+        if (wanted === "light" || wanted === "dark") {
+          applyTheme(wanted, true);
+          return toast(`Theme → ${wanted.toUpperCase()}`, "info", 2000);
+        }
+        toggleTheme();
+        return undefined;
+      }
+      case "copy":
+        return copyLastResponse();
+      case "status":
+        return showStatusSummary();
+      case "help":
+        openPalette();
+        return undefined;
+      default:
+        toast(`/${name} is not a cockpit command`, "error");
+        return undefined;
+    }
+  }
+
+  async function compactWithInstructions(instructions) {
+    try {
+      await api("/api/compact", instructions ? { instructions } : {});
+      toast(instructions ? "Compaction requested with instructions" : "Compaction requested", "info");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+
+  async function switchModelByQuery(query) {
+    const models = state.snapshot?.models || [];
+    const needle = query.toLowerCase();
+    const match =
+      models.find((model) => `${model.provider}/${model.id}`.toLowerCase() === needle) ||
+      models.find((model) => `${model.provider}/${model.id}`.toLowerCase().includes(needle)) ||
+      models.find((model) => String(model.name || "").toLowerCase().includes(needle));
+    if (!match) {
+      toast(`No model matches “${query}”`, "error");
+      return;
+    }
+    await setModel(match.provider, match.id, match.name);
+  }
+
+  function cycleThinking() {
+    const levels = state.snapshot?.thinkingLevels || [];
+    if (levels.length === 0) {
+      toast("This model has no thinking levels", "warning");
+      return undefined;
+    }
+    const current = state.snapshot?.thinkingLevel || "off";
+    const index = levels.indexOf(current);
+    const next = levels[(index + 1) % levels.length];
+    return setThinking(next);
+  }
+
+  async function renameTo(name) {
+    try {
+      await api("/api/session/rename", { name });
+      toast(name ? `Session renamed → ${name}` : "Session name cleared", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+
+  function showStatusSummary() {
+    const snapshot = state.snapshot;
+    if (!snapshot) {
+      toast("No session snapshot yet", "warning");
+      return;
+    }
+    const totals = snapshot.totals || {};
+    const usage = snapshot.contextUsage;
+    const parts = [
+      snapshot.model ? `${snapshot.model.provider}/${snapshot.model.id}` : "no model",
+      `thinking ${snapshot.thinkingLevel || "off"}`,
+      usage && usage.percent !== null ? `${usage.percent.toFixed(1)}% context` : "context —",
+      `${formatTokens(totals.input || 0)} in · ${formatTokens(totals.output || 0)} out`,
+      `$${Number(totals.cost || 0).toFixed(4)}`,
+      snapshot.status?.idle ? "idle" : snapshot.status?.kind || "busy",
+    ];
+    toast(parts.join(" · "), "info", 7000);
   }
 
   async function abortRun() {
@@ -1741,6 +1911,307 @@
     autoGrow();
     dom.input.focus();
     dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+    updateCompletion();
+  }
+
+  /* ------------------------------------------------------------
+     extension popups + terminal prompts
+     ------------------------------------------------------------ */
+
+  function applyPopups(popups) {
+    state.popups = Array.isArray(popups) ? popups.filter((popup) => popup && popup.id && popup.title) : [];
+    renderPopup();
+  }
+
+  function upsertPopup(popup) {
+    if (!popup || !popup.id) return;
+    state.popups = [...state.popups.filter((entry) => entry.id !== popup.id), popup];
+    renderPopup();
+  }
+
+  function removePopup(id) {
+    const before = state.popups.length;
+    state.popups = state.popups.filter((entry) => entry.id !== id);
+    if (state.popups.length !== before) renderPopup();
+  }
+
+  function renderPopup() {
+    const popup = state.popups[0];
+    if (!popup) {
+      dom.popupLayer.hidden = true;
+      state.popupDraft = "";
+      return;
+    }
+    if (!dom.popupLayer.hidden && dom.popupLayer.dataset.popupId !== popup.id) state.popupDraft = "";
+
+    dom.popupLayer.dataset.popupId = popup.id;
+    dom.popupLayer.hidden = false;
+    dom.popupKicker.textContent = (popup.source || "EXTENSION").toUpperCase();
+    dom.popupTitle.textContent = popup.title || "";
+    dom.popupMessage.textContent = popup.message || "";
+    dom.popupMessage.hidden = !popup.message;
+
+    const hasOptions = Array.isArray(popup.options) && popup.options.length > 0;
+    dom.popupOptions.hidden = !hasOptions || popup.kind === "input";
+    if (hasOptions && popup.kind !== "input") {
+      dom.popupOptions.innerHTML = popup.options
+        .map(
+          (option) => `<button type="button" class="popup-option" data-value="${escapeAttr(option.value)}">
+            <span>${escapeHtml(option.label)}</span>
+            ${option.description ? `<span class="popup-option-desc">${escapeHtml(option.description)}</span>` : ""}
+          </button>`,
+        )
+        .join("");
+    } else {
+      dom.popupOptions.innerHTML = "";
+    }
+
+    const wantsInput = popup.kind === "input";
+    dom.popupInput.hidden = !wantsInput;
+    if (wantsInput) {
+      dom.popupInput.placeholder = popup.placeholder || "";
+      if (dom.popupInput.value !== (state.popupDraft || popup.value || popup.defaultValue || "")) {
+        dom.popupInput.value = state.popupDraft || popup.value || popup.defaultValue || "";
+      }
+    }
+
+    const notice = popup.kind === "notice";
+    dom.popupCancel.hidden = notice || popup.allowCancel === false;
+    // A select popup is answered by picking an option; there is no extra confirm step.
+    dom.popupOk.hidden = popup.kind === "select" && hasOptions;
+    if (popup.kind === "confirm") {
+      dom.popupOk.textContent = "CONFIRM";
+      dom.popupCancel.textContent = "CANCEL";
+    } else if (popup.kind === "notice") {
+      dom.popupOk.textContent = "DISMISS";
+    } else {
+      dom.popupOk.textContent = wantsInput ? "SUBMIT" : "SELECT";
+      dom.popupCancel.textContent = "CANCEL";
+    }
+    dom.popupOk.disabled = false;
+
+    const queued = state.popups.length - 1;
+    dom.popupQueue.hidden = queued <= 0;
+    dom.popupQueue.textContent = queued > 0 ? `+${queued} more popup${queued === 1 ? "" : "s"} queued` : "";
+
+    if (wantsInput) requestAnimationFrame(() => dom.popupInput.focus());
+    else requestAnimationFrame(() => {
+      const first = dom.popupOptions.querySelector(".popup-option");
+      (first || dom.popupOk).focus();
+    });
+  }
+
+  async function answerPopup(value, cancelled) {
+    const popup = state.popups[0];
+    if (!popup) return;
+    const payload = { id: popup.id };
+    if (cancelled) payload.cancelled = true;
+    else if (value !== undefined) payload.value = value;
+    try {
+      await api("/api/ui/answer", payload);
+      removePopup(popup.id);
+    } catch (error) {
+      toast(error.message, "error");
+      removePopup(popup.id);
+    }
+  }
+
+  function applyUiPrompt(prompt) {
+    state.uiPrompt = prompt || null;
+    const active = Boolean(prompt);
+    dom.uiPrompt.hidden = !active;
+    if (active) {
+      const kind = String(prompt.kind || "prompt").toUpperCase();
+      dom.uiPromptTitle.textContent = prompt.title ? `${kind} · ${prompt.title}` : `${kind} prompt`;
+    }
+  }
+
+  /* ------------------------------------------------------------
+     / completion
+     ------------------------------------------------------------ */
+
+  const ORIGIN_LABELS = {
+    web: "COCKPIT",
+    extension: "EXTENSION",
+    prompt: "PROMPT",
+    skill: "SKILL",
+    terminal: "TERMINAL",
+  };
+
+  function completionArguments(command) {
+    if (!command) return [];
+    if (command.name === "model") {
+      return (state.snapshot?.models || []).map((model) => ({
+        value: `${model.provider}/${model.id}`,
+        label: `${model.provider}/${model.id}`,
+        description: model.name && model.name !== model.id ? model.name : "",
+      }));
+    }
+    if (command.name === "thinking") {
+      return (state.snapshot?.thinkingLevels || []).map((level) => ({ value: level, label: level, description: "" }));
+    }
+    if (command.name === "theme") {
+      return [
+        { value: "dark", label: "dark", description: "neon flight deck" },
+        { value: "light", label: "light", description: "daylight cockpit" },
+      ];
+    }
+    return [];
+  }
+
+  function scoreCommand(command, query) {
+    const name = command.name.toLowerCase();
+    const needle = query.toLowerCase();
+    if (!needle) return 1;
+    if (name === needle) return 1000;
+    if (name.startsWith(needle)) return 500 + (40 - Math.min(40, name.length));
+    if (name.includes(needle)) return 200 - name.indexOf(needle);
+    // subsequence match, mirrors the uplink palette
+    let position = 0;
+    for (const char of needle) {
+      position = name.indexOf(char, position);
+      if (position === -1) return -1;
+      position += 1;
+    }
+    return 10;
+  }
+
+  function updateCompletion() {
+    const value = dom.input.value;
+    const commandMatch = /^\/([A-Za-z0-9:_-]*)$/.exec(value);
+    const argumentMatch = /^\/([A-Za-z0-9:_-]+)\s+([^\s]*)$/.exec(value);
+
+    if (commandMatch) {
+      const query = commandMatch[1] || "";
+      const commands = state.snapshot?.commands || [];
+      const scored = commands
+        .map((command) => ({ command, score: scoreCommand(command, query) }))
+        .filter((entry) => entry.score >= 0)
+        .sort((a, b) => b.score - a.score || a.command.name.localeCompare(b.command.name))
+        .slice(0, 40);
+      state.cmd.mode = "command";
+      state.cmd.command = null;
+      state.cmd.filtered = scored.map((entry) => ({
+        value: entry.command.name,
+        label: entry.command.name,
+        description: entry.command.description || "",
+        argumentHint: entry.command.argumentHint,
+        origin: entry.command.origin,
+      }));
+      if (state.cmd.index >= state.cmd.filtered.length) state.cmd.index = 0;
+      openCompletion();
+      return;
+    }
+
+    if (argumentMatch) {
+      const command = findCommand(argumentMatch[1]);
+      const query = argumentMatch[2] || "";
+      const args = completionArguments(command);
+      if (command && args.length > 0) {
+        const needle = query.toLowerCase();
+        state.cmd.mode = "argument";
+        state.cmd.command = command;
+        state.cmd.filtered = args
+          .filter((arg) => !needle || arg.value.toLowerCase().includes(needle) || arg.label.toLowerCase().includes(needle))
+          .slice(0, 40);
+        if (state.cmd.index >= state.cmd.filtered.length) state.cmd.index = 0;
+        openCompletion();
+        return;
+      }
+    }
+
+    closeCompletion();
+  }
+
+  function openCompletion() {
+    if (state.cmd.filtered.length === 0) {
+      closeCompletion();
+      return;
+    }
+    state.cmd.open = true;
+    dom.cmdMenu.hidden = false;
+    renderCompletion();
+  }
+
+  function closeCompletion() {
+    if (!state.cmd.open) return;
+    state.cmd.open = false;
+    dom.cmdMenu.hidden = true;
+    state.cmd.index = 0;
+    state.cmd.command = null;
+  }
+
+  function renderCompletion() {
+    const items = state.cmd.filtered;
+    const head =
+      state.cmd.mode === "argument" && state.cmd.command
+        ? `/${state.cmd.command.name} ${state.cmd.command.argumentHint || "ARGUMENT"}`
+        : "COMMANDS";
+    dom.cmdHead.textContent = head;
+
+    dom.cmdList.innerHTML = items
+      .map((item, index) => {
+        const arguing = state.cmd.mode === "argument";
+        const origin = item.origin || "web";
+        const badge = arguing ? "" : ORIGIN_LABELS[origin] || origin.toUpperCase();
+        const args = !arguing && item.argumentHint ? ` <span class="cmd-args">${escapeHtml(item.argumentHint)}</span>` : "";
+        const selected = index === state.cmd.index ? " selected" : "";
+        const label = arguing ? escapeHtml(item.label) : `/${escapeHtml(item.label)}`;
+        return `<button type="button" class="cmd-item${selected}" data-index="${index}" data-origin="${escapeAttr(origin)}" role="option" aria-selected="${index === state.cmd.index}">
+          <span class="cmd-name">${label}${args}</span>
+          <span class="cmd-desc">${escapeHtml(truncate(item.description || "", 90))}</span>
+          ${badge ? `<span class="cmd-badge">${escapeHtml(badge)}</span>` : "<span></span>"}
+        </button>`;
+      })
+      .join("");
+
+    const selected = dom.cmdList.querySelector(".cmd-item.selected");
+    if (selected && typeof selected.scrollIntoView === "function") selected.scrollIntoView({ block: "nearest" });
+  }
+
+  function moveCompletion(delta) {
+    const length = state.cmd.filtered.length;
+    if (length === 0) return;
+    state.cmd.index = (state.cmd.index + delta + length) % length;
+    renderCompletion();
+  }
+
+  function commandAcceptsNoArgs(command) {
+    if (!command) return true;
+    const hint = String(command.argumentHint || "").trim();
+    // Optional arguments are written as `[name]`; required ones as `<name>`.
+    return hint === "" || hint.startsWith("[");
+  }
+
+  function applyCompletion(index = state.cmd.index) {
+    const item = state.cmd.filtered[index];
+    if (!item) return;
+    if (state.cmd.mode === "argument" && state.cmd.command) {
+      dom.input.value = `/${state.cmd.command.name} ${item.value}`;
+      closeCompletion();
+      autoGrow();
+      dom.input.focus();
+      dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+      return;
+    }
+    const command = findCommand(item.value);
+    if (command && command.origin === "terminal") {
+      toast(`/${command.name} only runs in the Pi terminal`, "warning", 3600);
+      closeCompletion();
+      return;
+    }
+    // An exactly-typed command that needs no arguments runs on the same Enter.
+    const typed = dom.input.value.trim().toLowerCase();
+    if (typed === `/${item.value}`.toLowerCase() && commandAcceptsNoArgs(command)) {
+      closeCompletion();
+      void sendPrompt();
+      return;
+    }
+    dom.input.value = `/${item.value} `;
+    autoGrow();
+    dom.input.focus();
+    dom.input.setSelectionRange(dom.input.value.length, dom.input.value.length);
+    updateCompletion();
   }
 
   /* ------------------------------------------------------------
@@ -1833,6 +2304,29 @@
   }
 
   function handleComposerKey(event) {
+    if (state.cmd.open) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveCompletion(1);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveCompletion(-1);
+        return;
+      }
+      if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey && !event.isComposing)) {
+        event.preventDefault();
+        applyCompletion();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCompletion();
+        return;
+      }
+    }
+
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       sendPrompt();
@@ -1862,6 +2356,29 @@
         abortRun();
       } else {
         dom.input.blur();
+      }
+    }
+  }
+
+  function handlePopupKey(event) {
+    const popup = state.popups[0];
+    if (!popup) return;
+    if (event.key === "Escape") {
+      if (popup.allowCancel !== false && popup.kind !== "notice") {
+        event.preventDefault();
+        answerPopup(undefined, true);
+      }
+      return;
+    }
+    if (event.key === "Enter" && !event.isComposing) {
+      if (popup.kind === "input") {
+        event.preventDefault();
+        answerPopup(dom.popupInput.value);
+        return;
+      }
+      if (popup.kind === "notice") {
+        event.preventDefault();
+        answerPopup(undefined, false);
       }
     }
   }
@@ -1899,7 +2416,7 @@
 
   function scheduleBoot() {
     dom.app.hidden = false;
-    bootLog("PI COCKPIT KERNEL v0.1.0");
+    bootLog(`PI COCKPIT KERNEL${state.snapshot?.version ? ` v${state.snapshot.version}` : ""}`);
     setTimeout(() => bootLog("MOUNTING SESSION TELEMETRY"), 260);
     setTimeout(() => bootLog("OPENING EVENT UPLINK"), 540);
     setTimeout(() => {
@@ -2053,8 +2570,44 @@
     dom.input.addEventListener("input", () => {
       autoGrow();
       state.promptIndex = -1;
+      updateCompletion();
     });
     dom.input.addEventListener("keydown", handleComposerKey);
+    dom.input.addEventListener("blur", () => {
+      // A click on the menu fires after blur; defer so the click still lands.
+      setTimeout(() => {
+        if (!dom.cmdMenu.contains(document.activeElement)) closeCompletion();
+      }, 120);
+    });
+
+    dom.cmdList.addEventListener("mousedown", (event) => event.preventDefault());
+    dom.cmdList.addEventListener("click", (event) => {
+      const item = event.target.closest(".cmd-item");
+      if (!item) return;
+      applyCompletion(Number(item.dataset.index));
+    });
+
+    dom.popupOptions.addEventListener("click", (event) => {
+      const option = event.target.closest(".popup-option");
+      if (!option) return;
+      answerPopup(option.dataset.value, false);
+    });
+    dom.popupOk.addEventListener("click", () => {
+      const popup = state.popups[0];
+      if (!popup) return;
+      if (popup.kind === "input") answerPopup(dom.popupInput.value);
+      else if (popup.kind === "notice") answerPopup(undefined, false);
+      else {
+        const selected = dom.popupOptions.querySelector(".popup-option.selected");
+        answerPopup(selected ? selected.dataset.value : undefined, false);
+      }
+    });
+    dom.popupCancel.addEventListener("click", () => answerPopup(undefined, true));
+    dom.popupInput.addEventListener("input", () => {
+      state.popupDraft = dom.popupInput.value;
+    });
+    dom.popupInput.addEventListener("keydown", handlePopupKey);
+    dom.popupLayer.addEventListener("keydown", handlePopupKey);
     dom.sendBtn.addEventListener("click", sendPrompt);
     dom.abortBtn.addEventListener("click", abortRun);
     dom.scrollLive.addEventListener("click", () => {

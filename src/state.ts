@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { PopupSpec } from "./popups.ts";
 
 export type CockpitStatus =
   | "idle"
@@ -90,7 +91,11 @@ export interface CockpitSnapshot {
     active: boolean;
     source: string | undefined;
   }>;
-  commands: Array<{ name: string; description: string | undefined; source: string }>;
+  commands: CockpitCommand[];
+  /** A blocking extension dialog is waiting on the terminal. */
+  uiPrompt: { kind: string; title: string | undefined; since: number } | null;
+  /** Popups an extension rendered through the webman popup bridge. */
+  popups: PopupSpec[];
   activity: ActivityItem[];
   capabilities: {
     newSession: boolean;
@@ -114,6 +119,61 @@ export interface ModelInfo {
 }
 
 export const ALL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/**
+ * `web` commands are executed by the cockpit itself, `extension`/`prompt`/
+ * `skill` commands are real Pi commands, and `terminal` entries are Pi builtins
+ * that only the terminal editor can run — offered for discovery, never sent to
+ * the model.
+ */
+export type CommandOrigin = "web" | "extension" | "prompt" | "skill" | "terminal";
+
+export interface CockpitCommand {
+  name: string;
+  description: string | undefined;
+  source: string;
+  origin: CommandOrigin;
+  argumentHint?: string;
+}
+
+/** Commands the cockpit executes against its own API instead of the model. */
+export const WEB_COMMANDS: CockpitCommand[] = [
+  { name: "compact", description: "Compact the session context", source: "webman", origin: "web", argumentHint: "[instructions]" },
+  { name: "model", description: "Switch model core", source: "webman", origin: "web", argumentHint: "<provider/model>" },
+  { name: "thinking", description: "Set the thinking level", source: "webman", origin: "web", argumentHint: "<level>" },
+  { name: "name", description: "Rename this session", source: "webman", origin: "web", argumentHint: "<callsign>" },
+  { name: "new", description: "Start a new session", source: "webman", origin: "web" },
+  { name: "abort", description: "Abort the active run", source: "webman", origin: "web" },
+  { name: "theme", description: "Switch cockpit theme", source: "webman", origin: "web", argumentHint: "[light|dark]" },
+  { name: "copy", description: "Copy the last assistant response", source: "webman", origin: "web" },
+  { name: "status", description: "Show a session status summary", source: "webman", origin: "web" },
+  { name: "help", description: "Open the command uplink", source: "webman", origin: "web" },
+];
+
+/**
+ * Pi builtins from the current release. They are handled by the interactive
+ * editor, so a web prompt containing one would otherwise be billed as a model
+ * request. Listing them keeps `/` completion honest about what exists.
+ */
+export const TERMINAL_COMMANDS: CockpitCommand[] = [
+  { name: "settings", description: "Open the settings menu", source: "pi", origin: "terminal" },
+  { name: "tree", description: "Navigate the session tree", source: "pi", origin: "terminal" },
+  { name: "fork", description: "Fork from an earlier user message", source: "pi", origin: "terminal" },
+  { name: "clone", description: "Duplicate the session at this position", source: "pi", origin: "terminal" },
+  { name: "resume", description: "Resume another saved session", source: "pi", origin: "terminal" },
+  { name: "import", description: "Import and resume a JSONL session", source: "pi", origin: "terminal", argumentHint: "<path>" },
+  { name: "export", description: "Export the session (HTML or JSONL)", source: "pi", origin: "terminal", argumentHint: "[path]" },
+  { name: "share", description: "Share the session and get a link", source: "pi", origin: "terminal" },
+  { name: "bug", description: "Prepare a bug report for the Pi developers", source: "pi", origin: "terminal", argumentHint: "[description]" },
+  { name: "scoped-models", description: "Choose models for interactive cycling", source: "pi", origin: "terminal" },
+  { name: "trust", description: "Save a project trust decision", source: "pi", origin: "terminal" },
+  { name: "login", description: "Add provider authentication", source: "pi", origin: "terminal", argumentHint: "<provider>" },
+  { name: "logout", description: "Remove provider authentication", source: "pi", origin: "terminal" },
+  { name: "changelog", description: "Show changelog entries", source: "pi", origin: "terminal" },
+  { name: "hotkeys", description: "Show active keyboard shortcuts", source: "pi", origin: "terminal" },
+  { name: "reload", description: "Reload extensions, skills and context", source: "pi", origin: "terminal" },
+  { name: "quit", description: "Quit Pi", source: "pi", origin: "terminal" },
+];
 
 const MAX_HISTORY_ITEMS = 2_500;
 
@@ -158,6 +218,8 @@ export interface SnapshotExtras {
   lastError?: string;
   statusSince: number;
   activity: ActivityItem[];
+  uiPrompt?: { kind: string; title: string | undefined; since: number } | null;
+  popups?: PopupSpec[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -192,6 +254,31 @@ function countToolCalls(message: AgentMessage): number {
     if (block && block.type === "toolCall") count += 1;
   }
   return count;
+}
+
+/**
+ * One command list for `/` completion: cockpit-native first, then the live Pi
+ * commands, then builtins that need the terminal (shown, never executed here).
+ */
+export function mergeCommands(live: CockpitCommand[]): CockpitCommand[] {
+  const seen = new Set<string>();
+  const merged: CockpitCommand[] = [];
+  const push = (command: CockpitCommand) => {
+    if (!command.name || seen.has(command.name)) return;
+    seen.add(command.name);
+    merged.push(command);
+  };
+  WEB_COMMANDS.forEach(push);
+  // Webman's own plumbing owns /web, /webman and /web-session; offering them
+  // in the browser would let a click stop the server or replace the session
+  // behind the cockpit's back.
+  const plumbing = new Set(["web", "webman", "web-session"]);
+  for (const command of live) {
+    if (plumbing.has(command.name)) continue;
+    push(command);
+  }
+  TERMINAL_COMMANDS.forEach(push);
+  return merged;
 }
 
 export function buildSnapshot(
@@ -313,6 +400,7 @@ export function buildSnapshot(
       name: command.name,
       description: command.description,
       source: command.source,
+      origin: command.source,
     }));
   } catch {
     commands = [];
@@ -361,7 +449,9 @@ export function buildSnapshot(
     history: trimmedHistory,
     historyTruncated,
     tools,
-    commands,
+    commands: mergeCommands(commands),
+    uiPrompt: extras.uiPrompt ?? null,
+    popups: extras.popups ?? [],
     activity: extras.activity,
     capabilities: {
       // Session replacement through a command context is only reliable in

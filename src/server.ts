@@ -18,6 +18,8 @@ export interface CockpitBackend {
   compact(instructions?: string): void;
   rename(name: string): void;
   newSession(): void;
+  /** Answer or dismiss a popup published through the extension popup bridge. */
+  answerPopup(payload: { id?: unknown; value?: unknown; cancelled?: unknown }): { ok: boolean; error?: string };
   isBusy(): boolean;
 }
 
@@ -219,6 +221,16 @@ async function handlePost(
         return;
       }
       respondJson(res, 202, { ok: true });
+      return;
+    }
+
+    case "/api/ui/answer": {
+      const result = backend.answerPopup(body);
+      if (!result.ok) {
+        respondJson(res, 404, { error: result.error || "Unknown popup" });
+        return;
+      }
+      respondJson(res, 200, { ok: true });
       return;
     }
 

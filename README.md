@@ -26,6 +26,11 @@ A real run: directive in, tool calls, a streamed answer and live telemetry —
   level; enable/disable tools; rename the session; compact context; start a new session
   (interactive mode); switch between light and dark mode.
 - **Command uplink** — `Ctrl/Cmd+K` palette for actions, models, Pi slash commands and tools.
+- **`/` completion** — type `/` in the composer for fuzzy command search with argument
+  completion for models and thinking levels, matching Pi's terminal editor.
+- **Extension popups** — dialogs an extension opens in the terminal are mirrored as a
+  native modal in the cockpit, and extensions that opt in through the popup bridge get
+  the answer back (see [Extension popups](#extension-popups)).
 - **Light & dark modes** — toggle from the top bar or the command uplink. The cockpit follows
   the OS preference on first visit, remembers your choice, and recolours the HUD, transcript
   and background canvases together.
@@ -114,15 +119,111 @@ Environment equivalents: `PI_COCKPIT_PORT`, `PI_COCKPIT_HOST`, `PI_COCKPIT_TOKEN
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Transmit directive |
+| `Enter` | Transmit directive, or run the highlighted command |
 | `Shift+Enter` | Newline |
-| `Esc` | Close palette/modal, otherwise abort the active run |
+| `Tab` | Accept the highlighted command or argument |
+| `↑` / `↓` | Move through the `/` menu, or the command uplink |
+| `Esc` | Dismiss the `/` menu or palette, otherwise abort the active run |
 | `Ctrl/Cmd+K` | Open or close the command uplink |
-| `↑` / `↓` | Navigate the palette |
 | `↑` (empty composer) | Recall previous directive |
 
 `AUTO` sends immediately when idle and queues a follow-up when Pi is busy. `STEER` enters
 after the current assistant turn and its tool calls. `FOLLOW` waits until the run settles.
+
+## Commands
+
+Typing `/` in the composer opens the same command surface as Pi's terminal editor:
+
+![Command completion](docs/completion.png)
+
+Each entry is tagged with where it runs:
+
+| Badge | Meaning |
+| --- | --- |
+| `COCKPIT` | Executed by the browser against the cockpit API — never sent to the model |
+| `EXTENSION`, `PROMPT`, `SKILL` | Real Pi commands, forwarded to the session |
+| `TERMINAL` | A Pi builtin that only the interactive editor can run |
+
+Cockpit commands:
+
+| Command | Effect |
+| --- | --- |
+| `/compact [instructions]` | Compact the context, optionally with custom instructions |
+| `/model [provider/model]` | Switch the model core (argument completion) |
+| `/thinking <level>` | Set the thinking level (argument completion) |
+| `/name <callsign>` | Rename the session |
+| `/new` | Start a new session |
+| `/abort` | Abort the active run |
+| `/theme [light\|dark]` | Toggle or set the cockpit theme |
+| `/copy` | Copy the last assistant response |
+| `/status` | One-line session summary |
+| `/help` | Open the command uplink |
+
+`TERMINAL` commands are listed so the surface is honest, but they are refused rather than
+forwarded: Pi handles its builtins in the interactive editor, so sending `/quit` or
+`/thinking low` as a prompt would otherwise be billed to the model as text.
+
+![Argument completion](docs/argument-completion.png)
+
+## Extension popups
+
+Pi renders extension dialogs in the terminal, and the extension API does not let one
+extension read or answer another's dialog — it only reports that a prompt is waiting. The
+cockpit therefore covers both cases:
+
+1. **Nothing to install.** While any extension dialog is open, the composer shows a
+   `TERMINAL PROMPT` banner with the prompt kind and title, so the browser never looks
+   frozen and you know to answer in the terminal.
+2. **Popup bridge.** Extensions can render their popup in the browser instead and receive
+   the answer, over the shared `pi.events` bus:
+
+```ts
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  pi.events.on("webman:popup:answer", (answer) => {
+    console.log(answer); // { id, value } or { id, cancelled: true }
+  });
+
+  pi.registerCommand("hud", {
+    description: "Open the HUD",
+    handler: async (_args, ctx) => {
+      pi.events.emit("webman:popup:open", {
+        id: `hud-${Date.now()}`,
+        kind: "select", // select | confirm | input | notice
+        title: "DOCKER HUD",
+        message: "3 containers running",
+        options: [
+          { value: "api", label: "api-7f9c", description: "up 3 hours · :8080" },
+          { value: "db", label: "postgres-1a2b", description: "up 3 hours · :5432" },
+        ],
+        source: "my-extension",
+      });
+    },
+  });
+}
+```
+
+Channels:
+
+| Channel | Direction | Payload |
+| --- | --- | --- |
+| `webman:popup:open` | extension → cockpit | popup spec (`id`, `kind`, `title`, `message?`, `options?`, `placeholder?`, `allowCancel?`, `source?`) |
+| `webman:popup:answer` | cockpit → extension | `{ id, value? , cancelled? }` |
+| `webman:popup:close` | either way | `{ id }` — dismiss without an answer |
+| `webman:popup:ping` / `pong` | extension ⇄ cockpit | `{ id }` → `{ id, url, version, clients }`, to check whether a browser is listening |
+| `webman:popup:ready` | cockpit → extensions | `{ url, version, clients }` when the server starts |
+
+A runnable extension that implements all of it — including falling back to a terminal
+dialog when no browser is connected — lives in
+[`examples/popup-bridge-demo.ts`](examples/popup-bridge-demo.ts):
+
+```bash
+pi -e ./examples/popup-bridge-demo.ts --web
+/hud-demo      # select popup, answered in the browser
+/hud-notice    # notice popup
+/hud-terminal  # counter-example: terminal-only dialog, mirrored as a banner
+```
 
 ## Security
 
@@ -147,11 +248,13 @@ reach it can send prompts and change the active model/tools, so protect the toke
 src/index.ts     extension entry: flags, /web command, lifecycle events, runtime
 src/server.ts    HTTP server, auth, JSON API, SSE endpoint, static assets
 src/hub.ts       SSE fan-out with a hydrate-before-stream barrier
-src/state.ts     branch-aware session snapshot, telemetry and capabilities
+src/state.ts     branch-aware session snapshot, telemetry, command catalog
+src/popups.ts    extension popup bridge: registry, validation, channels
 src/serialize.ts cycle-safe JSON with bounded string sizes
 src/assets.ts    generated UI bundle (do not edit)
 ui/              source for the HTML/CSS/JS cockpit
 scripts/         UI asset bundler
+examples/        runnable popup-bridge extension
 ```
 
 The extension subscribes to Pi lifecycle events (`message_*`, `tool_execution_*`,
