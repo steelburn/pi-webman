@@ -1798,6 +1798,8 @@
       const terminalOnlyCommands = new Set(["web", "webman", "web-session", "cockpit"]);
       for (const command of snapshot.commands || []) {
         if (terminalOnlyCommands.has(command.name)) continue;
+        // Terminal builtins cannot run here; they belong to `/` completion only.
+        if (command.origin === "terminal") continue;
         items.push({
           group: "COMMANDS",
           icon: "/",
