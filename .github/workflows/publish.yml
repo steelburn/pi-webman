@@ -94,8 +94,21 @@ jobs:
             echo "::notice::$name@$version is already on npm — nothing to do"
             exit 0
           fi
-          npm publish --provenance --access public
-          echo "::notice::published $name@$version"
+          set +e
+          npm publish --provenance --access public 2>&1 | tee /tmp/publish.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            if grep -q 'ENEEDAUTH' /tmp/publish.log; then
+              echo "::error::npm rejected the publish: no trusted publisher is configured for $name."
+              echo "Open https://www.npmjs.com/package/$name → Settings → Trusted publishing and add:"
+              echo "  publisher    GitHub Actions"
+              echo "  repository   ${GITHUB_REPOSITORY}"
+              echo "  workflow     $(basename "$GITHUB_WORKFLOW_REF" | cut -d@ -f1)"
+              echo "Or, locally: npx npm@11 trust github $name --file publish.yml --repo ${GITHUB_REPOSITORY} --allow-publish"
+            fi
+            exit "$status"
+          fi
+          echo "::notice::published $name@$version with provenance"
 
       - name: Summarize
         if: always()
