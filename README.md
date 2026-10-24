@@ -307,9 +307,18 @@ git push
 ```
 
 Publishing the GitHub release triggers the workflow, which checks out the tag, verifies
-that it matches `package.json`, runs `npm run check`, and publishes. The job is idempotent —
-if the version is already on npm it reports that and exits cleanly, so re-running a release
-or a failed job is safe. `workflow_dispatch` publishes an existing tag by hand.
+that it matches `package.json`, runs `npm run check`, and publishes with a provenance
+attestation. The job is idempotent — if the version is already on npm it reports that and
+exits cleanly, so re-running a release or a failed job is safe. `workflow_dispatch`
+publishes an existing tag by hand.
+
+The trusted publisher grants `Publish` and/or `Publish staged`:
+
+- **Publish** — CI goes live unattended.
+- **Publish staged only** — CI uploads the attested tarball to npm's staging area and the
+  job summary prints the stage id; a maintainer approves it with 2FA
+  (`npx npm@11 stage approve <id>`, or the package page on npmjs.com). The workflow detects
+  the `OIDC permission denied` rejection and stages instead of failing the release.
 
 One-time setup, on <https://www.npmjs.com/package/pi-webman> → **Settings → Trusted
 publishing**: publisher `GitHub Actions`, organization `steelburn`, repository
