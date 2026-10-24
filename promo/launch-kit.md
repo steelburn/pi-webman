@@ -42,7 +42,9 @@ Body (HN gives you a text field; keep it plain, no marketing):
 > It streams the transcript over SSE (reconnects hydrate from a full snapshot), shows token
 > and cost telemetry, and lets you send/steer/follow up, abort, switch model and thinking
 > level, toggle tools, compact, or start a new session. There is a Ctrl/Cmd+K palette for
-> all of it.
+> all of it, and typing `/` completes Pi's own slash commands (cockpit, extension, prompt
+> template, skill) with Tab/↑/↓, refusing the terminal-only ones instead of silently
+> forwarding them to the model.
 >
 > Design constraints I set: no runtime dependencies (Node built-ins only, the UI is bundled
 > into the extension), loopback by default, origin checks, strict CSP, optional bearer token
@@ -64,7 +66,14 @@ First comment (post immediately after submitting):
 > 2. Session replacement. Pi rebuilds extensions on new/fork/resume, which orphaned the
 >    server at first: the old instance kept the port and answered "no active session".
 >    The fix is a handoff of host/port/token through module scope so the next instance
->    adopts the same URL and the open tab just reconnects. Released as 0.1.5 today.
+>    adopts the same URL and the open tab just reconnects.
+>
+> Bonus for 0.2.x: `/` in the browser completes Pi's own slash commands — cockpit commands,
+> extension commands (from `registerCommand`), prompt templates, skills and terminal-only
+> builtins — and refuses to forward the ones that must run in the terminal, so `/thinking low`
+> in the browser does not silently bill you for a model request. Extension TUI dialogs
+> (`ctx.ui.select`, `ctx.ui.input`) also mirror into the browser through an opt-in event
+> bridge, with the terminal staying authoritative.
 
 Rules: no vote solicitation, reply to every comment for the first 2–3 hours, expect
 criticism about "why not TUI" — the honest answer is a second screen and remote view.
@@ -108,6 +117,7 @@ sub per day.
 > — context/token/cost telemetry
 > — model, thinking, tool toggles
 > — ⌘K command uplink
+> — `/` completes Pi's own slash commands
 > — zero runtime deps, localhost only
 >
 > `pi install npm:pi-webman` · `/web open`
