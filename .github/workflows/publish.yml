@@ -121,7 +121,7 @@ jobs:
           if grep -q 'OIDC permission denied' /tmp/publish.log; then
             echo "::notice::direct publish is not granted — staging $name@$version instead"
             npm stage publish --provenance --access public 2>&1 | tee /tmp/stage.log
-            stage_id=$(grep -oE 'stage-[A-Za-z0-9_-]{6,}' /tmp/stage.log | head -1 || true)
+            stage_id=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|stage-[A-Za-z0-9_-]{6,}' /tmp/stage.log | head -1 || true)
             {
               echo "### Staged: $name@$version"
               echo
@@ -129,7 +129,8 @@ jobs:
               echo "attested tarball and stopped. Approval needs proof of presence (2FA)."
               echo
               if [ -n "$stage_id" ]; then echo "- stage id: \`$stage_id\`"; echo "- approve: \`npx npm@11 stage approve $stage_id\`"; fi
-              echo "- or approve in the web UI: https://www.npmjs.com/package/$name"
+              echo "- or approve in the web UI: https://www.npmjs.com/package/$name (Staged packages)"
+              echo "- inspect: `npx npm@11 stage view <id>`"
               echo "- to publish unattended next time, enable **Publish** on the trusted publisher"
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::notice::staged $name@$version — $stage_id — approve it to go live"
