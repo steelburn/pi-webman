@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags-ignore: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build, typecheck, lint UI
+        run: npm run check
+
+      - name: Committed UI bundle must match ui/
+        run: |
+          if ! git diff --quiet -- src/assets.ts; then
+            echo "::error file=src/assets.ts::src/assets.ts is stale — run 'npm run build' and commit the result."
+            git --no-pager diff --stat -- src/assets.ts
+            exit 1
+          fi
+
+      - name: Dry-run the package contents
+        run: npm pack --dry-run

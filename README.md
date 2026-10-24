@@ -290,6 +290,34 @@ curl -s http://127.0.0.1:4747/api/health
 curl -s http://127.0.0.1:4747/api/state | head -c 400
 ```
 
+### Releasing
+
+Publishing runs in CI (`.github/workflows/publish.yml`) through
+[npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers), so there is no
+`NPM_TOKEN` secret to store or rotate and every tarball is published with a provenance
+attestation.
+
+```bash
+# 1. bump the version
+npm version patch --no-git-tag-version   # or minor / major
+git commit -am "chore(release): $(node -p "require('./package.json').version")"
+git push
+
+# 2. cut the release: GitHub → Releases → Draft a new release → tag v<version> → Publish
+```
+
+Publishing the GitHub release triggers the workflow, which checks out the tag, verifies
+that it matches `package.json`, runs `npm run check`, and publishes. The job is idempotent —
+if the version is already on npm it reports that and exits cleanly, so re-running a release
+or a failed job is safe. `workflow_dispatch` publishes an existing tag by hand.
+
+One-time setup, on <https://www.npmjs.com/package/pi-webman> → **Settings → Trusted
+publishing**: publisher `GitHub Actions`, organization `steelburn`, repository
+`pi-webman`, workflow `publish.yml`.
+
+`ci.yml` runs the same checks on every push and pull request, and fails if
+`src/assets.ts` was not rebuilt after a UI change.
+
 ## Limitations
 
 - New sessions are only available when Pi runs in interactive (TUI) mode; RPC/JSON/print

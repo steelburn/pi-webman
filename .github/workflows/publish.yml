@@ -1,0 +1,110 @@
+name: publish
+
+# Publishing happens in CI, never from a laptop.
+#
+# Auth is npm Trusted Publishing (OIDC): there is no NPM_TOKEN secret, nothing
+# to rotate, and every tarball carries a provenance attestation. One-time setup
+# on https://www.npmjs.com/package/pi-webman → Settings → Trusted publishing:
+#
+#   Publisher:      GitHub Actions
+#   Organization:   steelburn
+#   Repository:     pi-webman
+#   Workflow name:  publish.yml
+#   Environment:    (none)
+#
+# Cut a release:
+#   1. npm version patch|minor|major --no-git-tag-version   (edits package.json)
+#   2. commit, push to main
+#   3. GitHub → Releases → "Draft a new release" → tag v<version> → Publish
+#      (or run this workflow manually against an existing tag)
+#
+# The job is idempotent: if the version is already on npm it reports that and
+# exits successfully instead of failing the release.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish, e.g. v0.2.0 (defaults to the selected ref)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write # OIDC: Trusted Publishing + provenance
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve ref
+        id: ref
+        run: |
+          ref="${{ github.event.release.tag_name || inputs.tag }}"
+          if [ -z "$ref" ]; then
+            ref="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Publishing $ref"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Use the newest npm (Trusted Publishing needs >= 11.5.1)
+        run: |
+          npm install --global npm@latest
+          npm --version
+
+      - name: Verify the tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="${{ steps.ref.outputs.ref }}"
+          if [ -n "$tag" ] && [ "${tag#v}" != "$version" ]; then
+            echo "::error::tag $tag does not match package.json version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Install
+        run: npm ci
+
+      - name: Build, typecheck, lint UI
+        run: npm run check
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: "" # always prefer OIDC over any stray token
+        run: |
+          name=$(node -p "require('./package.json').name")
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::notice::$name@$version is already on npm — nothing to do"
+            exit 0
+          fi
+          npm publish --provenance --access public
+          echo "::notice::published $name@$version"
+
+      - name: Summarize
+        if: always()
+        run: |
+          name=$(node -p "require('./package.json').name")
+          {
+            echo "### $name@${{ env.version }}"
+            echo
+            echo "- ref: \`${{ steps.ref.outputs.ref }}\`"
+            echo "- [package on npm](https://www.npmjs.com/package/$name)"
+            echo "- [catalog entry](https://pi.dev/packages/$name)"
+          } >> "$GITHUB_STEP_SUMMARY"
